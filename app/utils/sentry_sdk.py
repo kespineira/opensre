@@ -277,23 +277,16 @@ def _suppress_langgraph_allowed_objects_warning() -> Iterator[None]:
     """Hide the upstream LangGraph serializer warning during Sentry auto-discovery.
 
     Sentry's auto-enabled LangGraph integration imports ``langgraph.graph`` during
-    ``sentry_sdk.init()``, which currently triggers a LangChain pending-deprecation
-    warning about ``allowed_objects`` defaults inside LangGraph's serializer setup.
-    OpenSRE does not control that import path and the current runtime behavior
-    remains unchanged (LangChain still defaults to ``allowed_objects='core'``), so
-    we suppress only this one known startup warning until the upstream packages
-    expose an explicit configuration hook.
+    ``sentry_sdk.init()``, which currently triggers a ``PendingDeprecationWarning``
+    about ``allowed_objects`` defaults inside LangGraph's serializer setup. We
+    suppress only this one known startup warning, matching by message pattern so
+    the filter does not depend on importing the langchain warning subclass.
     """
     with warnings.catch_warnings():
-        category: type[Warning] = Warning
-        with suppress(Exception):
-            from langchain_core._api.deprecation import LangChainPendingDeprecationWarning
-
-            category = LangChainPendingDeprecationWarning
         warnings.filterwarnings(
             "ignore",
             message=r"The default value of `allowed_objects` will change in a future version\..*",
-            category=category,
+            category=PendingDeprecationWarning,
         )
         yield
 

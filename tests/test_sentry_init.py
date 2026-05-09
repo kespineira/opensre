@@ -363,18 +363,17 @@ def test_init_sentry_passes_explicit_integrations(monkeypatch) -> None:
 
 
 def test_init_sentry_suppresses_langgraph_allowed_objects_warning(monkeypatch) -> None:
-    from langchain_core._api.deprecation import LangChainPendingDeprecationWarning
-
     _clear_kill_switches(monkeypatch)
     init_mock, _ = _install_full_sentry_mock(monkeypatch)
 
+    warning_message = (
+        "The default value of `allowed_objects` will change in a future version. "
+        "Pass an explicit value (e.g., allowed_objects='messages' or "
+        "allowed_objects='core') to suppress this warning."
+    )
     init_mock.side_effect = lambda **_kwargs: warnings.warn(
-        (
-            "The default value of `allowed_objects` will change in a future version. "
-            "Pass an explicit value (e.g., allowed_objects='messages' or "
-            "allowed_objects='core') to suppress this warning."
-        ),
-        category=LangChainPendingDeprecationWarning,
+        warning_message,
+        category=PendingDeprecationWarning,
         stacklevel=1,
     )
 
@@ -386,7 +385,8 @@ def test_init_sentry_suppresses_langgraph_allowed_objects_warning(monkeypatch) -
     assert not [
         warning
         for warning in caught
-        if isinstance(warning.message, LangChainPendingDeprecationWarning)
+        if isinstance(warning.message, PendingDeprecationWarning)
+        and "allowed_objects" in str(warning.message)
     ]
 
 
