@@ -521,14 +521,15 @@ def summarize_highlights(
         if highlights:
             return highlights, False
     except Exception as exc:
+        if _bool_env("DAILY_UPDATE_REQUIRE_LLM", default=False):
+            # Let an outer boundary capture this — avoids a double Sentry event.
+            raise
         report_validation_failure(
             exc,
             logger=logger,
             integration="daily_update",
             method="summarize_highlights",
         )
-        if _bool_env("DAILY_UPDATE_REQUIRE_LLM", default=False):
-            raise
 
     return build_fallback_highlights(pull_requests), True
 

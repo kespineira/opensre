@@ -305,26 +305,53 @@ def _find_function(tree: ast.AST, name: str) -> ast.FunctionDef | None:
 
 
 def _broad_except_handlers(fn: ast.FunctionDef) -> list[ast.ExceptHandler]:
-    """Return all ``except Exception`` handlers anywhere inside the function body."""
-    handlers: list[ast.ExceptHandler] = []
+    """Return the *outermost* ``except Exception`` handlers in the function body.
+
+    Skips handlers that are themselves nested inside another broad-except — a
+    `report_validation_failure` placed in an inner handler wouldn't compensate
+    for a missing call in the outer one, which is the false-positive Greptile
+    flagged in PR #1869.
+    """
+    all_handlers: list[ast.ExceptHandler] = []
     for node in ast.walk(fn):
         if isinstance(node, ast.ExceptHandler):
             t = node.type
             if isinstance(t, ast.Name) and t.id == "Exception":
-                handlers.append(node)
-    return handlers
+                all_handlers.append(node)
+
+    nested: set[int] = set()
+    for outer in all_handlers:
+        for descendant in ast.walk(outer):
+            if descendant is outer:
+                continue
+            if isinstance(descendant, ast.ExceptHandler):
+                t = descendant.type
+                if isinstance(t, ast.Name) and t.id == "Exception":
+                    nested.add(id(descendant))
+
+    return [h for h in all_handlers if id(h) not in nested]
 
 
 def _calls_to(handler: ast.ExceptHandler, func_name: str) -> list[ast.Call]:
-    """Find ``func_name(...)`` calls inside an except handler body."""
+    """Find ``func_name(...)`` calls inside an except handler body.
+
+    Does not descend into nested ``except`` handler bodies — a call inside a
+    nested broad-except does not satisfy coverage of the outer one.
+    """
     matches: list[ast.Call] = []
-    for node in ast.walk(handler):
+    stack: list[ast.AST] = list(handler.body)
+    while stack:
+        node = stack.pop()
+        if isinstance(node, ast.ExceptHandler):
+            # Don't descend into another except's body; its calls aren't ours.
+            continue
         if (
             isinstance(node, ast.Call)
             and isinstance(node.func, ast.Name)
             and node.func.id == func_name
         ):
             matches.append(node)
+        stack.extend(ast.iter_child_nodes(node))
     return matches
 
 
@@ -378,3 +405,52 @@ def test_every_migrated_module_imports_the_helper() -> None:
         assert (
             "from app.integrations._validation_helpers import report_validation_failure" in source
         ), f"{module_path} migration is incomplete: missing import of report_validation_failure"
+
+
+def test_broad_except_handlers_skips_nested_handlers() -> None:
+    """The helper must ignore broad-except handlers nested inside another broad-except.
+
+    Otherwise a `report_validation_failure` call in the inner handler would
+    falsely satisfy the assertion when the outer handler is uncovered (the
+    false-positive path flagged by Greptile on PR #1869).
+    """
+    source = """
+def f():
+    try:
+        do_thing()
+    except Exception:
+        try:
+            cleanup()
+        except Exception:
+            report_validation_failure(err, integration="x", method="f")
+"""
+    tree = ast.parse(source)
+    fn = _find_function(tree, "f")
+    assert fn is not None
+    handlers = _broad_except_handlers(fn)
+    assert len(handlers) == 1, "should return only the outer handler"
+    # The call exists only in the inner handler; helper must not surface it.
+    assert _calls_to(handlers[0], "report_validation_failure") == []
+
+
+def test_broad_except_handlers_finds_handler_inside_normal_control_flow() -> None:
+    """Handlers inside for/while/if are still surfaced — only nested-except is excluded.
+
+    Airflow's per-DAG-run capture lives inside a ``for`` loop's try block; the
+    helper must not regress that case.
+    """
+    source = """
+def f():
+    for x in items:
+        try:
+            work(x)
+        except Exception:
+            report_validation_failure(err, integration="x", method="f")
+            continue
+"""
+    tree = ast.parse(source)
+    fn = _find_function(tree, "f")
+    assert fn is not None
+    handlers = _broad_except_handlers(fn)
+    assert len(handlers) == 1
+    assert _calls_to(handlers[0], "report_validation_failure")
