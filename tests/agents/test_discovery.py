@@ -157,6 +157,9 @@ def test_discovers_cursor_claude_code_process() -> None:
     assert records[0].name == "cursor-claude-code"
     assert records[0].pid == 80435
     assert records[0].source == "discovered"
+    # cursor-claude-code wraps the real Claude Code NDJSON output, so the
+    # provider rolls up to the same meter (#2023).
+    assert records[0].provider == "claude-code"
 
 
 def test_discovers_cursor_agent_exec_helper() -> None:
@@ -173,6 +176,10 @@ def test_discovers_cursor_agent_exec_helper() -> None:
     )
 
     assert [(record.name, record.pid) for record in records] == [("cursor-agent-exec", 23995)]
+    # cursor-agent-exec emits Cursor-proprietary output that the Anthropic
+    # meter cannot parse; rolls up to the ``cursor`` provider so it routes
+    # to ``NullMeter`` rather than misreading as claude-code (#2023).
+    assert records[0].provider == "cursor"
 
 
 def test_ignores_generic_desktop_cursor_processes() -> None:
@@ -211,6 +218,29 @@ def test_discovers_agent_cli_from_cursor_terminal_metadata(tmp_path: Path) -> No
     assert [(record.name, record.pid, record.source) for record in records] == [
         ("claude-code", 12345, "discovered")
     ]
+    # ``provider`` is set on cursor-terminal discoveries so the dashboard
+    # wiring (#2023) can resolve them without re-classifying.
+    assert records[0].provider == "claude-code"
+
+
+def test_discovered_claude_code_record_carries_provider() -> None:
+    records = discover_agents(
+        process_rows=[ProcessRow(pid=42, command="claude code")],
+        cursor_projects_dir=Path("/does/not/exist"),
+    )
+
+    assert records[0].name == "claude-code"
+    assert records[0].provider == "claude-code"
+
+
+def test_discovered_codex_record_carries_provider() -> None:
+    records = discover_agents(
+        process_rows=[ProcessRow(pid=99, command="codex exec --ephemeral")],
+        cursor_projects_dir=Path("/does/not/exist"),
+    )
+
+    assert records[0].name == "codex"
+    assert records[0].provider == "codex"
 
 
 def test_ignores_plain_claude_commands_with_code_prefix_arguments() -> None:

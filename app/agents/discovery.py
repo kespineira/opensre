@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from app.agents.probe import process_has_open_codex_rollout
+from app.agents.providers import provider_from_classified_name
 from app.agents.registry import AgentRecord, AgentRegistry
 
 logger = logging.getLogger(__name__)
@@ -54,7 +55,13 @@ class DiscoveredAgent:
     command: str
 
     def to_record(self) -> AgentRecord:
-        return AgentRecord(name=self.name, pid=self.pid, command=self.command, source="discovered")
+        return AgentRecord(
+            name=self.name,
+            pid=self.pid,
+            command=self.command,
+            source="discovered",
+            provider=provider_from_classified_name(self.name),
+        )
 
 
 @dataclass(frozen=True)
@@ -120,6 +127,7 @@ def discover_agents(
             pid=row.pid,
             command=row.command,
             source="discovered",
+            provider=provider_from_classified_name(name),
         )
 
     for record in _discover_cursor_terminal_agents(cursor_projects_dir):
@@ -345,7 +353,13 @@ def _record_from_cursor_terminal(path: Path) -> AgentRecord | None:
     name = _agent_name_for_command(command)
     if name is None:
         return None
-    return AgentRecord(name=name, pid=pid, command=command, source="discovered")
+    return AgentRecord(
+        name=name,
+        pid=pid,
+        command=command,
+        source="discovered",
+        provider=provider_from_classified_name(name),
+    )
 
 
 def _agent_name_for_command(command: str) -> str | None:
