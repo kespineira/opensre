@@ -112,6 +112,22 @@ class TestCommandHeuristic:
     def test_command_helper_returns_none_for_unknown_command(self) -> None:
         assert provider_from_command("python -m app.worker") is None
 
+    def test_loose_claude_code_argv_does_not_false_positive(self) -> None:
+        # A command that happens to pass ``claude`` and ``code`` as
+        # arbitrary argv tokens (model flag + format flag) must NOT
+        # be classified as claude-code — the matcher only fires on
+        # ``argv[0]``. Regression for the Greptile finding that the
+        # earlier ``"claude" in tokens and "code" in tokens`` check
+        # would wire unrelated processes to ``ClaudeCodeJsonlSource``.
+        assert provider_from_command("run-tests --model claude --format code --verbose") is None
+
+    def test_loose_codex_argv_does_not_false_positive(self) -> None:
+        # Same regression for the codex/aider/gemini families: the
+        # matcher must be argv[0]-only, never a global token scan.
+        assert provider_from_command("python build.py --module codex") is None
+        assert provider_from_command("npm run --script aider-fixture") is None
+        assert provider_from_command("node --inspect gemini-mock.js") is None
+
 
 class TestUnknownProviders:
     """Unrecognized names fall through to ``None`` rather than raising."""

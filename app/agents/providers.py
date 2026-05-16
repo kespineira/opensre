@@ -62,7 +62,6 @@ def provider_from_command(command: str) -> str | None:
     if not cmdline:
         return None
     executable = _normalized_token(cmdline[0])
-    tokens = {_normalized_token(part) for part in cmdline}
     lower = command.lower()
 
     if ".cursor/extensions/anthropic.claude-code" in lower:
@@ -71,13 +70,19 @@ def provider_from_command(command: str) -> str | None:
         return "cursor"
     if "cursor-agent" in lower or "cursor agent" in lower:
         return "cursor"
-    if executable in {"claude", "claude-code"} or ("claude" in tokens and "code" in tokens):
+    # Match only on argv[0] (the resolved executable name). A loose
+    # "X in tokens" fallback false-positives on argv like
+    # ``run-tests --model claude --format code`` and would wire an
+    # unrelated process to ``ClaudeCodeJsonlSource``. Every real CLI
+    # puts the binary in argv[0]; Cursor's wrapped variant is caught
+    # by the ``.cursor/extensions/...`` substring branch above.
+    if executable in {"claude", "claude-code"}:
         return "claude-code"
-    if executable == "codex" or "codex" in tokens:
+    if executable == "codex":
         return "codex"
-    if executable == "aider" or "aider" in tokens:
+    if executable == "aider":
         return "aider"
-    if executable == "gemini" or "gemini" in tokens:
+    if executable == "gemini":
         return "gemini-cli"
     return None
 
