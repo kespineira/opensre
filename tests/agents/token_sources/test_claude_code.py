@@ -59,6 +59,21 @@ def _patch_cwd(monkeypatch: pytest.MonkeyPatch, cwd: Path) -> None:
     )
 
 
+def _patch_open_files(monkeypatch: pytest.MonkeyPatch, *paths: Path) -> None:
+    """Make ``open_files_for_pid`` return ``paths`` for any PID.
+
+    The source only attributes a JSONL to a PID when the PID has its
+    fd open — the misattribution-prone fallback to ``newest-by-mtime``
+    was removed in response to Greptile's review. Tests that expect
+    resolution to succeed must declare which session the fake PID is
+    "holding".
+    """
+    monkeypatch.setattr(
+        "app.agents.token_sources.claude_code.open_files_for_pid",
+        lambda _pid: paths,
+    )
+
+
 def _patch_cwd_raises(monkeypatch: pytest.MonkeyPatch, exc: type[BaseException]) -> None:
     """Simulate the psutil failure path: ``cwd_for_pid`` returns ``None``.
 
@@ -129,19 +144,25 @@ class TestFirstCallResolution:
         session = project_dir / "session-abc.jsonl"
         session.write_text("historical line\n" * 50, encoding="utf-8")
         _patch_cwd(monkeypatch, cwd)
+        _patch_open_files(monkeypatch, session)
 
         first = source.read_new_chunk(1234)
         # ``""`` (not None): the PID is now resolved but there is
         # nothing new since cold start.
         assert first == ""
 
-    def test_picks_newest_jsonl_when_multiple_exist(
+    def test_picks_newest_jsonl_when_pid_holds_multiple(
         self,
         source: ClaudeCodeJsonlSource,
         monkeypatch: pytest.MonkeyPatch,
         projects_root: Path,
         tmp_path: Path,
     ) -> None:
+        # A PID can briefly hold fds on two JSONLs (an old session it
+        # is finishing flushing, plus the new one it is writing).
+        # When multiple fd-matching candidates exist, the source must
+        # pick the newest by mtime — the active session — never the
+        # stale one.
         cwd = tmp_path / "myrepo"
         cwd.mkdir()
         project_dir = projects_root / _mangled_dir(cwd)
@@ -157,6 +178,7 @@ class TestFirstCallResolution:
         newer = project_dir / "new.jsonl"
         newer.write_text("new\n", encoding="utf-8")
         _patch_cwd(monkeypatch, cwd)
+        _patch_open_files(monkeypatch, older, newer)
 
         # First call seeks to EOF on the newest file. We then append
         # to *that* file and confirm the next read returns that
@@ -165,6 +187,33 @@ class TestFirstCallResolution:
         with newer.open("a", encoding="utf-8") as fh:
             fh.write("appended\n")
         assert source.read_new_chunk(1234) == "appended\n"
+
+    def test_returns_none_when_pid_holds_no_jsonl_fd(
+        self,
+        source: ClaudeCodeJsonlSource,
+        monkeypatch: pytest.MonkeyPatch,
+        projects_root: Path,
+        tmp_path: Path,
+    ) -> None:
+        # Mirror of the codex source contract: when there is no
+        # fd-level evidence that this PID owns a JSONL under the
+        # project dir, return ``None`` rather than falling back to a
+        # global ``newest-by-mtime`` pick. The old behaviour
+        # silently misattributed another session's tokens; the
+        # dashboard now honestly renders ``-`` instead.
+        cwd = tmp_path / "myrepo"
+        cwd.mkdir()
+        project_dir = projects_root / _mangled_dir(cwd)
+        project_dir.mkdir()
+        leftover = project_dir / "someone-elses.jsonl"
+        leftover.write_text("not mine\n", encoding="utf-8")
+        _patch_cwd(monkeypatch, cwd)
+        # ``open_files_for_pid`` returns ``()`` via the autouse
+        # fixture — no fds for this PID.
+
+        assert source.read_new_chunk(1234) is None
+        # Retry next tick must also stay ``None`` (no poisoned cache).
+        assert source.read_new_chunk(1234) is None
 
     def test_prefers_pid_open_file_when_cwd_has_multiple_sessions(
         self,
@@ -218,6 +267,7 @@ class TestIncrementalReads:
         session = project_dir / "session.jsonl"
         session.write_text("initial\n", encoding="utf-8")
         _patch_cwd(monkeypatch, cwd)
+        _patch_open_files(monkeypatch, session)
 
         source.read_new_chunk(1234)
         # Distinct from ``None``: source is observing, nothing new.
@@ -239,6 +289,7 @@ class TestIncrementalReads:
         session = project_dir / "session.jsonl"
         session.write_text("turn1\n", encoding="utf-8")
         _patch_cwd(monkeypatch, cwd)
+        _patch_open_files(monkeypatch, session)
 
         source.read_new_chunk(1234)  # seeks to EOF
         with session.open("a", encoding="utf-8") as fh:
@@ -268,6 +319,7 @@ class TestRotation:
         session = project_dir / "session.jsonl"
         session.write_text("first session\n", encoding="utf-8")
         _patch_cwd(monkeypatch, cwd)
+        _patch_open_files(monkeypatch, session)
 
         source.read_new_chunk(1234)
 
@@ -300,6 +352,7 @@ class TestForget:
         session = project_dir / "session.jsonl"
         session.write_text("turn1\nturn2\n", encoding="utf-8")
         _patch_cwd(monkeypatch, cwd)
+        _patch_open_files(monkeypatch, session)
 
         source.read_new_chunk(1234)  # cache state, EOF = end of two lines
         source.forget(1234)

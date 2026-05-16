@@ -41,6 +41,8 @@ class ClaudeCodeJsonlSource(IncrementalJsonlSource):
         if not candidates:
             return None
         session = _session_file_for_pid(pid, candidates, project_dir)
+        if session is None:
+            return None
         return self._initial_state_for(session)
 
 
@@ -48,7 +50,18 @@ def _mangle_cwd(cwd: Path) -> str:
     return str(cwd).replace("/", "-")
 
 
-def _session_file_for_pid(pid: int, candidates: list[Path], project_dir: Path) -> Path:
+def _session_file_for_pid(pid: int, candidates: list[Path], project_dir: Path) -> Path | None:
+    """Return the JSONL this PID has open, or ``None`` if undetermined.
+
+    Each live claude-code holds an fd on its session JSONL while
+    writing; ``open_files_for_pid`` is the only reliable PID→file
+    signal when several sessions share one project dir (concurrent
+    invocations from the same cwd, or zombie session files from a
+    previous run). Falling back to ``newest-by-mtime`` would silently
+    bill one PID's tokens against another's row, which is exactly
+    what codex's source declines to do — keep the two providers
+    symmetric so the dashboard's accuracy contract is the same.
+    """
     open_jsonl_paths = {
         path
         for path in open_files_for_pid(pid)
@@ -57,7 +70,7 @@ def _session_file_for_pid(pid: int, candidates: list[Path], project_dir: Path) -
     matching = [path for path in candidates if path in open_jsonl_paths]
     if matching:
         return max(matching, key=safe_mtime)
-    return max(candidates, key=safe_mtime)
+    return None
 
 
 __all__ = ["ClaudeCodeJsonlSource"]

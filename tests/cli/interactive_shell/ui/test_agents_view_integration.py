@@ -79,6 +79,13 @@ def test_claude_code_end_to_end_renders_real_tokens_and_cost(
         "app.agents.token_sources.claude_code.cwd_for_pid",
         lambda _pid: fake_cwd,
     )
+    # After the Greptile-driven fix, the claude source requires
+    # fd-level evidence to attribute a JSONL to a PID (no more
+    # silent fallback to newest-by-mtime — mirrors codex).
+    monkeypatch.setattr(
+        "app.agents.token_sources.claude_code.open_files_for_pid",
+        lambda _pid: (session,),
+    )
 
     # Wire a fresh source against the test projects root so the
     # production singleton (which would hit ``~/.claude/projects/``)

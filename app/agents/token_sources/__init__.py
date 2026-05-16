@@ -129,23 +129,24 @@ class IncrementalJsonlSource(ABC):
     def _detect_rotation(state: _PerPidState) -> _PerPidState | None:
         """Return a fresh state when the cached file rotated, else ``None``.
 
-        Rotation signals: file gone, inode changed (delete+recreate),
-        size regressed below the cached offset (filesystems like ext4
-        and APFS reuse recently-freed inodes, so the inode-change
-        signal alone misses unlink+rewrite when the new file lands on
-        the same inode), or mtime moved backwards by more than 5 s.
-        On any signal, seek to the new file's EOF so we never
-        retro-price historical content.
+        Rotation signals (require positive evidence from a successful
+        ``stat``): inode changed (delete+recreate), size regressed
+        below the cached offset (filesystems like ext4 and APFS reuse
+        recently-freed inodes, so the inode-change signal alone misses
+        unlink+rewrite when the new file lands on the same inode), or
+        mtime moved backwards by more than 5 s. On any signal, seek to
+        the new file's EOF so we never retro-price historical content.
+
+        A transient stat failure (file briefly absent, EAGAIN on a
+        busy FS) leaves the cached state intact — flipping ``offset``
+        to 0 on every stat error would replay the whole file the next
+        time it reappears on the same inode, double-counting every
+        token already billed.
         """
         try:
             stat = state.log_path.stat()
         except OSError:
-            return _PerPidState(
-                log_path=state.log_path,
-                inode=state.inode,
-                mtime=state.mtime,
-                offset=0,
-            )
+            return None
         if stat.st_ino != state.inode:
             return _PerPidState(
                 log_path=state.log_path,
