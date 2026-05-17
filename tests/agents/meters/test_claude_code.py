@@ -111,17 +111,19 @@ def test_handles_each_event_type_in_isolation(meter: ClaudeCodeMeter) -> None:
 
 def test_cache_token_counters_are_not_summed(meter: ClaudeCodeMeter) -> None:
     """``cache_creation_input_tokens`` and ``cache_read_input_tokens``
-    are deliberately ignored — they're billed at different rates and
-    the dashboard's ``$/hr`` column will need them broken out
-    separately when cache-cost tracking ships in a follow-up.
+    are included in visible activity and broken out for exact pricing.
     """
     chunk_with_cache = (
         '{"type":"assistant","message":{"usage":{"input_tokens":100,'
         '"cache_creation_input_tokens":500,"cache_read_input_tokens":2000,'
         '"output_tokens":50}}}'
     )
-    # 100 + 50 = 150, NOT 100 + 500 + 2000 + 50 = 2650
-    assert meter.parse_chunk(chunk_with_cache) == 150
+    sample = meter.sample_chunk(chunk_with_cache)
+    assert sample.tokens == 2650
+    assert sample.usage.input_tokens == 100
+    assert sample.usage.cache_creation_input_tokens == 500
+    assert sample.usage.cache_read_input_tokens == 2000
+    assert sample.usage.output_tokens == 50
 
 
 def test_malformed_json_lines_are_skipped(meter: ClaudeCodeMeter) -> None:

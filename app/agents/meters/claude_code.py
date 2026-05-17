@@ -7,9 +7,8 @@ cumulative totals — counting it would overcount by ~50% in any
 multi-turn session.
 
 Cache counters (``cache_creation_input_tokens``,
-``cache_read_input_tokens``) bill at 1.25× and 0.10× of input
-respectively, so a flat sum with ``input_tokens`` would mis-price.
-A future split per counter requires extending the meter return shape.
+``cache_read_input_tokens``) are returned separately so pricing can
+apply the right per-bucket rates.
 """
 
 from __future__ import annotations
@@ -17,17 +16,17 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from app.agents.meters import TokenSample, safe_int
+from app.agents.meters import TokenSample, TokenUsage, safe_int
 
 
 class ClaudeCodeMeter:
-    """Sums ``input_tokens`` + ``output_tokens`` from ``assistant`` events."""
+    """Extracts token usage from ``assistant`` events."""
 
     def parse_chunk(self, chunk: str) -> int:
         return self.sample_chunk(chunk).tokens
 
-    def sample_chunk(self, chunk: str) -> TokenSample:
-        total = 0
+    def sample_chunk(self, chunk: str, *, pid: int | None = None) -> TokenSample:  # noqa: ARG002
+        usage = TokenUsage()
         latest_model: str | None = None
         for line in chunk.splitlines():
             stripped = line.strip()
@@ -37,23 +36,34 @@ class ClaudeCodeMeter:
                 event: Any = json.loads(stripped)
             except (json.JSONDecodeError, ValueError):
                 continue
-            total += _tokens_from_event(event)
+            usage += _usage_from_event(event)
             event_model = _model_from_event(event)
             if event_model is not None:
                 latest_model = event_model
-        return TokenSample(tokens=total, model=latest_model)
+        return TokenSample(usage=usage, model=latest_model)
+
+    def forget(self, _pid: int) -> None:
+        return None
+
+    def known_pids(self) -> list[int]:
+        return []
 
 
-def _tokens_from_event(event: object) -> int:
+def _usage_from_event(event: object) -> TokenUsage:
     if not isinstance(event, dict) or event.get("type") != "assistant":
-        return 0
+        return TokenUsage()
     message = event.get("message")
     if not isinstance(message, dict):
-        return 0
+        return TokenUsage()
     usage = message.get("usage")
     if not isinstance(usage, dict):
-        return 0
-    return safe_int(usage.get("input_tokens")) + safe_int(usage.get("output_tokens"))
+        return TokenUsage()
+    return TokenUsage(
+        input_tokens=safe_int(usage.get("input_tokens")),
+        output_tokens=safe_int(usage.get("output_tokens")),
+        cache_read_input_tokens=safe_int(usage.get("cache_read_input_tokens")),
+        cache_creation_input_tokens=safe_int(usage.get("cache_creation_input_tokens")),
+    )
 
 
 def _model_from_event(event: object) -> str | None:

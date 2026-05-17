@@ -20,8 +20,8 @@ import logging
 
 from app.agents.config import AgentsConfig, load_agents_config
 from app.agents.discovery import registered_and_discovered_agents
-from app.agents.meters.registry import get_token_meter
-from app.agents.pricing import PriceOverride, usd_per_hour
+from app.agents.meters.registry import TOKEN_METER_REGISTRY, get_token_meter
+from app.agents.pricing import PriceOverride, normalize_model_name, usd_per_hour_for_usage
 from app.agents.probe import ProcessSnapshot, env_value_for_pid, probe
 from app.agents.providers import provider_for
 from app.agents.registry import AgentRecord, AgentRegistry
@@ -115,10 +115,10 @@ def _sample_tokens(agent: AgentRecord) -> None:
     if chunk is None:
         return
     meter = get_token_meter(provider)
-    sample = meter.sample_chunk(chunk)
+    sample = meter.sample_chunk(chunk, pid=agent.pid)
     # Always record, even with tokens=0, so a known-idle PID renders
     # as ``0`` rather than the never-seen ``-``.
-    TOKEN_RATE_TRACKER.record(agent.pid, sample.tokens, model=sample.model)
+    TOKEN_RATE_TRACKER.record(agent.pid, usage=sample.usage, model=sample.model)
 
 
 def _gc_disappeared_agents(live_pids: set[int]) -> None:
@@ -133,19 +133,23 @@ def _gc_disappeared_agents(live_pids: set[int]) -> None:
     known = set(TOKEN_RATE_TRACKER.known_pids())
     for source in TOKEN_SOURCE_REGISTRY.values():
         known.update(source.known_pids())
+    for meter in TOKEN_METER_REGISTRY.values():
+        known.update(meter.known_pids())
     for pid in known - live_pids:
         TOKEN_RATE_TRACKER.forget(pid)
         for source in TOKEN_SOURCE_REGISTRY.values():
             source.forget(pid)
+        for meter in TOKEN_METER_REGISTRY.values():
+            meter.forget(pid)
 
 
 def _compute_usd_per_hour(pid: int) -> float | None:
-    tpm = TOKEN_RATE_TRACKER.tokens_per_min(pid)
-    if tpm is None:
+    usage_per_min = TOKEN_RATE_TRACKER.usage_per_min(pid)
+    if usage_per_min is None:
         return None
     model = _resolved_model_for_pid(pid)
     override = _price_override_for_pid(pid)
-    return usd_per_hour(tpm, model, override)
+    return usd_per_hour_for_usage(usage_per_min, model, override)
 
 
 def _price_override_for_pid(pid: int) -> PriceOverride | None:
@@ -175,7 +179,7 @@ def _resolved_model_for_pid(pid: int) -> str | None:
     """
     tracked = TOKEN_RATE_TRACKER.latest_model(pid)
     if tracked is not None:
-        return tracked
+        return normalize_model_name(tracked)
 
     record = _registry_record_for(pid)
     if record is None:
@@ -185,7 +189,7 @@ def _resolved_model_for_pid(pid: int) -> str | None:
     if config is not None:
         budget = config.agents.get(record.name)
         if budget is not None and budget.model is not None:
-            return budget.model
+            return normalize_model_name(budget.model)
 
     provider = provider_for(record)
     if provider is None:
@@ -193,7 +197,7 @@ def _resolved_model_for_pid(pid: int) -> str | None:
     env_key = _MODEL_ENV_KEYS.get(provider)
     if env_key is None:
         return None
-    return env_value_for_pid(pid, env_key)
+    return normalize_model_name(env_value_for_pid(pid, env_key))
 
 
 def _registry_record_for(pid: int) -> AgentRecord | None:

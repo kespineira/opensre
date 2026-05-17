@@ -2,9 +2,20 @@
 
 from __future__ import annotations
 
+import logging
+
 import pytest
 
-from app.agents.pricing import MODEL_PRICES, usd_per_hour, usd_per_token_blended
+from app.agents.meters import TokenUsage
+from app.agents.pricing import (
+    MODEL_PRICES,
+    PriceOverride,
+    normalize_model_name,
+    usd_for_usage,
+    usd_per_hour,
+    usd_per_hour_for_usage,
+    usd_per_token_blended,
+)
 
 
 class TestUsdPerTokenBlended:
@@ -82,8 +93,78 @@ class TestUsdPerHour:
         assert 0.0 < cost < 0.10
 
 
+class TestUsdForUsage:
+    def test_codex_cached_input_uses_discounted_rate(self) -> None:
+        usage = TokenUsage(input_tokens=1000, cached_input_tokens=250, output_tokens=100)
+        cost = usd_for_usage(usage, "gpt-5-codex")
+        expected = (750 * 1.25e-6) + (250 * 0.125e-6) + (100 * 10e-6)
+        assert cost == pytest.approx(expected)
+
+    def test_codex_cached_input_is_clamped_to_input(self) -> None:
+        usage = TokenUsage(input_tokens=100, cached_input_tokens=500, output_tokens=0)
+        cost = usd_for_usage(usage, "gpt-5-codex")
+        assert cost == pytest.approx(100 * 0.125e-6)
+
+    def test_codex_cached_input_clamp_logs_debug(self, caplog: pytest.LogCaptureFixture) -> None:
+        usage = TokenUsage(input_tokens=100, cached_input_tokens=500)
+        with caplog.at_level(logging.DEBUG, logger="app.agents.pricing"):
+            usd_for_usage(usage, "gpt-5-codex")
+
+        assert "cached_input_tokens exceeded input_tokens" in caplog.text
+
+    def test_claude_cache_buckets_use_separate_rates(self) -> None:
+        usage = TokenUsage(
+            input_tokens=100,
+            cache_read_input_tokens=2000,
+            cache_creation_input_tokens=500,
+            output_tokens=50,
+        )
+        cost = usd_for_usage(usage, "claude-sonnet-4-5")
+        expected = (100 * 3e-6) + (2000 * 0.3e-6) + (500 * 3.75e-6) + (50 * 15e-6)
+        assert cost == pytest.approx(expected)
+
+    def test_hourly_usage_rate_projects_cost_per_minute(self) -> None:
+        usage = TokenUsage(input_tokens=1000, cached_input_tokens=250, output_tokens=100)
+        per_min_cost = usd_for_usage(usage, "gpt-5-codex")
+        assert per_min_cost is not None
+        assert usd_per_hour_for_usage(usage, "gpt-5-codex") == pytest.approx(per_min_cost * 60.0)
+
+    def test_unknown_model_returns_none(self) -> None:
+        assert usd_for_usage(TokenUsage(input_tokens=100), "claude-galaxy-9000") is None
+
+    def test_input_output_overrides_keep_cache_ratio_for_known_model(self) -> None:
+        usage = TokenUsage(input_tokens=1000, cached_input_tokens=100, output_tokens=10)
+        override = PriceOverride(input_usd_per_million=2.0, output_usd_per_million=20.0)
+        cost = usd_for_usage(usage, "gpt-5-codex", override)
+        expected = (900 * 2e-6) + (100 * 0.2e-6) + (10 * 20e-6)
+        assert cost == pytest.approx(expected)
+
+
+class TestNormalizeModelName:
+    def test_openai_prefix_is_stripped(self) -> None:
+        assert normalize_model_name("openai/gpt-5.3-codex") == "gpt-5.3-codex"
+
+    def test_anthropic_prefix_is_stripped(self) -> None:
+        assert normalize_model_name("anthropic/claude-sonnet-4-5") == "claude-sonnet-4-5"
+
+    def test_bedrock_style_claude_id_resolves_to_base(self) -> None:
+        assert (
+            normalize_model_name("us.anthropic.claude-sonnet-4-5-20250929-v1:0")
+            == "claude-sonnet-4-5-20250929"
+        )
+
+    def test_at_default_variant_resolves_to_base(self) -> None:
+        assert normalize_model_name("claude-sonnet-4-5@default") == "claude-sonnet-4-5"
+
+
 class TestFamilyFallbackCoherence:
     """Drift guards on ``_FAMILY_FALLBACKS`` ↔ ``MODEL_PRICES``."""
+
+    def test_family_fallbacks_are_longest_prefix_first(self) -> None:
+        from app.agents.pricing import _FAMILY_FALLBACKS
+
+        lengths = [len(prefix) for prefix, _canonical_id in _FAMILY_FALLBACKS]
+        assert lengths == sorted(lengths, reverse=True)
 
     def test_every_family_fallback_canonical_id_has_a_price(self) -> None:
         # Without this guard, a typo in ``_FAMILY_FALLBACKS``'s

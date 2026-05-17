@@ -63,9 +63,8 @@ def test_info_null_token_count_event_returns_zero(meter: CodexMeter) -> None:
 
 
 def test_cached_input_tokens_are_not_summed(meter: CodexMeter) -> None:
-    """``cached_input_tokens`` bills at ~0.10× of regular input;
-    flat-summing it with ``input_tokens`` would overcount
-    cache-heavy sessions. Lock the exclusion in.
+    """``cached_input_tokens`` is a discounted subset of input,
+    so it is exposed for pricing but not added to visible tokens.
     """
     chunk = (
         '{"type":"event_msg","payload":{"type":"token_count","info":'
@@ -74,7 +73,11 @@ def test_cached_input_tokens_are_not_summed(meter: CodexMeter) -> None:
         '"output_tokens":50,"reasoning_output_tokens":0,"total_tokens":150}}}}'
     )
     # 100 + 50 = 150, NOT 100 + 500 + 50 = 650.
-    assert meter.parse_chunk(chunk) == 150
+    sample = meter.sample_chunk(chunk)
+    assert sample.tokens == 150
+    assert sample.usage.input_tokens == 100
+    assert sample.usage.cached_input_tokens == 500
+    assert sample.usage.output_tokens == 50
 
 
 def test_reasoning_output_tokens_are_not_summed(meter: CodexMeter) -> None:
@@ -108,6 +111,58 @@ def test_total_token_usage_is_not_summed(meter: CodexMeter) -> None:
     )
     # Only the per-turn delta contributes.
     assert meter.parse_chunk(chunk) == 15
+
+
+def test_total_token_usage_fallback_initializes_baseline(meter: CodexMeter) -> None:
+    """When Codex omits ``last_token_usage``, the first cumulative
+    total for a PID becomes the baseline and must not retro-price the
+    session history.
+    """
+    chunk = (
+        '{"type":"event_msg","payload":{"type":"token_count","info":'
+        '{"total_token_usage":'
+        '{"input_tokens":1000,"cached_input_tokens":400,"output_tokens":200}}}}'
+    )
+    sample = meter.sample_chunk(chunk, pid=4242)
+    assert sample.tokens == 0
+    assert sample.usage.input_tokens == 0
+
+
+def test_total_token_usage_fallback_counts_delta(meter: CodexMeter) -> None:
+    first = (
+        '{"type":"event_msg","payload":{"type":"token_count","info":'
+        '{"total_token_usage":'
+        '{"input_tokens":1000,"cached_input_tokens":400,"output_tokens":200}}}}'
+    )
+    second = (
+        '{"type":"event_msg","payload":{"type":"token_count","info":'
+        '{"total_token_usage":'
+        '{"input_tokens":1125,"cached_input_tokens":450,"output_tokens":240}}}}'
+    )
+    assert meter.sample_chunk(first, pid=4242).tokens == 0
+    sample = meter.sample_chunk(second, pid=4242)
+    assert sample.tokens == 165
+    assert sample.usage.input_tokens == 125
+    assert sample.usage.cached_input_tokens == 50
+    assert sample.usage.output_tokens == 40
+
+
+def test_total_token_usage_reset_rebaselines_without_delta(meter: CodexMeter) -> None:
+    first = (
+        '{"type":"event_msg","payload":{"type":"token_count","info":'
+        '{"total_token_usage":'
+        '{"input_tokens":1000,"cached_input_tokens":400,"output_tokens":200}}}}'
+    )
+    reset = (
+        '{"type":"event_msg","payload":{"type":"token_count","info":'
+        '{"total_token_usage":'
+        '{"input_tokens":25,"cached_input_tokens":10,"output_tokens":5}}}}'
+    )
+    assert meter.sample_chunk(first, pid=4242).tokens == 0
+    assert meter.sample_chunk(reset, pid=4242).tokens == 0
+    assert meter.known_pids() == [4242]
+    meter.forget(4242)
+    assert meter.known_pids() == []
 
 
 def test_non_token_count_events_return_zero(meter: CodexMeter) -> None:

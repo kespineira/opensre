@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from app.agents.meters import TokenSample
+from app.agents.meters import TokenSample, TokenUsage
 from app.agents.probe import ProcessSnapshot
 from app.agents.registry import AgentRecord, AgentRegistry
 from app.agents.sampler import (
@@ -90,10 +90,16 @@ class _FakeMeter:
         self._mapping = mapping
 
     def parse_chunk(self, chunk: str) -> int:
-        return self._mapping.get(chunk, TokenSample(0, None)).tokens
+        return self._mapping.get(chunk, TokenSample()).tokens
 
-    def sample_chunk(self, chunk: str) -> TokenSample:
-        return self._mapping.get(chunk, TokenSample(0, None))
+    def sample_chunk(self, chunk: str, *, pid: int | None = None) -> TokenSample:  # noqa: ARG002
+        return self._mapping.get(chunk, TokenSample())
+
+    def forget(self, _pid: int) -> None:
+        return None
+
+    def known_pids(self) -> list[int]:
+        return []
 
 
 @pytest.mark.asyncio
@@ -260,7 +266,7 @@ async def test_sampler_records_tokens_when_meter_returns_positive(
     monkeypatch.setattr("app.agents.sampler.probe", lambda _pid: fake_snapshot)
 
     source = _FakeSource(chunks=["chunk-1"])
-    meter = _FakeMeter({"chunk-1": TokenSample(tokens=200, model="claude-sonnet-4-5")})
+    meter = _FakeMeter({"chunk-1": TokenSample.from_tokens(200, model="claude-sonnet-4-5")})
     _stub_token_pipeline(monkeypatch, provider="claude-code", source=source, meter=meter)
 
     task = start_sampler(interval=0.01)
@@ -278,6 +284,17 @@ async def test_sampler_records_tokens_when_meter_returns_positive(
     cost = get_usd_per_hour(8421)
     assert cost is not None
     assert cost > 0.0
+
+
+def test_get_usd_per_hour_uses_structured_usage_buckets() -> None:
+    TOKEN_RATE_TRACKER.record(
+        8421,
+        usage=TokenUsage(input_tokens=1000, cached_input_tokens=250, output_tokens=100),
+        model="gpt-5-codex",
+    )
+
+    expected_per_min = (750 * 1.25e-6) + (250 * 0.125e-6) + (100 * 10e-6)
+    assert get_usd_per_hour(8421) == pytest.approx(expected_per_min * 60.0)
 
 
 @pytest.mark.asyncio
@@ -299,7 +316,7 @@ async def test_sampler_records_tokens_for_auto_discovered_agents(
     monkeypatch.setattr("app.agents.sampler.probe", lambda _pid: fake_snapshot)
 
     source = _FakeSource(chunks=["chunk-1"])
-    meter = _FakeMeter({"chunk-1": TokenSample(tokens=123, model="gpt-5-codex")})
+    meter = _FakeMeter({"chunk-1": TokenSample.from_tokens(123, model="gpt-5-codex")})
     _stub_token_pipeline(monkeypatch, provider="codex", source=source, meter=meter)
 
     task = start_sampler(interval=0.01)
@@ -369,7 +386,7 @@ async def test_one_token_source_failure_does_not_crash_loop(
             pass
 
     source = _CrashingSource()
-    meter = _FakeMeter({"ok": TokenSample(tokens=42, model="claude-sonnet-4-5")})
+    meter = _FakeMeter({"ok": TokenSample.from_tokens(42, model="claude-sonnet-4-5")})
     _stub_token_pipeline(monkeypatch, provider="claude-code", source=source, meter=meter)
 
     task = start_sampler(interval=0.01)
@@ -399,7 +416,7 @@ async def test_disappeared_agent_state_is_garbage_collected(
     monkeypatch.setattr("app.agents.sampler.probe", lambda _pid: fake_snapshot)
 
     source = _FakeSource(chunks=["chunk-1"])
-    meter = _FakeMeter({"chunk-1": TokenSample(tokens=100, model="claude-sonnet-4-5")})
+    meter = _FakeMeter({"chunk-1": TokenSample.from_tokens(100, model="claude-sonnet-4-5")})
     _stub_token_pipeline(monkeypatch, provider="claude-code", source=source, meter=meter)
 
     task = start_sampler(interval=0.01)

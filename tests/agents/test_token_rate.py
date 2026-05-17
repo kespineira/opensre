@@ -7,6 +7,7 @@ import time
 
 import pytest
 
+from app.agents.meters import TokenUsage
 from app.agents.token_rate import TokenRateTracker
 
 
@@ -46,6 +47,37 @@ class TestTokensPerMin:
         tracker.record(1234, tokens=-10)
         tracker.record(1234, tokens=100)
         assert tracker.tokens_per_min(1234) == pytest.approx(100.0)
+
+    def test_structured_usage_visible_total(self, tracker: TokenRateTracker) -> None:
+        tracker.record(
+            1234,
+            usage=TokenUsage(
+                input_tokens=100,
+                output_tokens=50,
+                cached_input_tokens=90,
+                cache_read_input_tokens=200,
+                cache_creation_input_tokens=25,
+            ),
+        )
+        assert tracker.tokens_per_min(1234) == pytest.approx(375.0)
+
+    def test_usage_per_min_returns_bucket_totals(self, tracker: TokenRateTracker) -> None:
+        tracker.record(1234, usage=TokenUsage(input_tokens=100, cached_input_tokens=25))
+        tracker.record(
+            1234,
+            usage=TokenUsage(
+                output_tokens=50,
+                cache_read_input_tokens=200,
+                cache_creation_input_tokens=10,
+            ),
+        )
+        usage = tracker.usage_per_min(1234)
+        assert usage is not None
+        assert usage.input_tokens == pytest.approx(100.0)
+        assert usage.cached_input_tokens == pytest.approx(25.0)
+        assert usage.output_tokens == pytest.approx(50.0)
+        assert usage.cache_read_input_tokens == pytest.approx(200.0)
+        assert usage.cache_creation_input_tokens == pytest.approx(10.0)
 
 
 class TestWindowEviction:

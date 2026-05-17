@@ -62,12 +62,11 @@ scaled to a per-minute figure. Three states:
   not running (non-interactive `opensre agents list` never starts
   the sampler).
 
-`cached_input_tokens` and `cache_creation_input_tokens` (Anthropic)
-and `cached_input_tokens` / `reasoning_output_tokens` (Codex) are
-excluded from the count — they bill at different rates and a flat
-sum would mis-price the `$/hr` column. A follow-up issue can split
-the meters' return surface so cache and reasoning tokens are priced
-correctly.
+Claude Code cache-read/cache-creation tokens are included in the
+visible activity count because they are separate input work. Codex
+`cached_input_tokens` are treated as a discounted subset of
+`input_tokens`, so they affect `$/hr` but are not added again to the
+visible `tokens/min` total.
 
 ### `$/hr` semantics
 
@@ -75,8 +74,8 @@ correctly.
 trailing 60 s window the `tokens/min` column reports — not the
 actual spend over the last hour:
 
-```
-$/hr = tokens_per_min × 60 × usd_per_token(model)
+```text
+$/hr = cost_of_usage_buckets_in_the_trailing_60s_window(model) × 60
 ```
 
 Reads as "if the agent sustains the current ritmo for one hour, it
@@ -87,11 +86,14 @@ at the default 5 s tick instead of an unbounded hour-long history).
 If you need actual spend over the last hour, that's a different
 metric — open a follow-up issue.
 
-`usd_per_token` is a 70/30 input/output blend (rationale in
-`app/agents/pricing.py`). Pricing returns `None` for unknown models
-and the cell falls back to `-`; the dashboard never invents a rate.
-The yaml `hourly_budget_usd` field is **not** the cell content —
-it's reserved for a future budget-alarm feature.
+Pricing uses per-bucket rates for input, output, cached input, cache
+read, and cache creation where the provider emits those counters. The
+local pricing table is a vendored `models.dev` snapshot for the
+Claude Code and Codex models supported here, with optional
+`agents.yaml` input/output overrides. Pricing returns `None` for
+unknown models and the cell falls back to `-`; the dashboard never
+invents a rate. The yaml `hourly_budget_usd` field is **not** the
+cell content — it's reserved for a future budget-alarm feature.
 
 Model resolution order (highest to lowest):
 

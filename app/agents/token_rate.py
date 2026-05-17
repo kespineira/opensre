@@ -22,11 +22,13 @@ from collections import defaultdict, deque
 from dataclasses import dataclass
 from typing import ClassVar
 
+from app.agents.meters import TokenUsage
+
 
 @dataclass(frozen=True)
 class _TokenEntry:
     timestamp: float
-    tokens: int
+    usage: TokenUsage
     model: str | None
 
 
@@ -47,12 +49,22 @@ class TokenRateTracker:
         # entries. Cleared only on ``forget``.
         self._latest_model: dict[int, str] = {}
 
-    def record(self, pid: int, tokens: int, *, model: str | None = None) -> None:
+    def record(
+        self,
+        pid: int,
+        tokens: float | None = None,
+        *,
+        usage: TokenUsage | None = None,
+        model: str | None = None,
+    ) -> None:
         """Append an observation. Eviction of stale entries happens here only."""
+        if usage is None:
+            usage = TokenUsage.from_total(0.0 if tokens is None else tokens)
+        usage = usage.clamped()
         now = time.monotonic()
         with self._lock:
             entries = self._per_pid[pid]
-            entries.append(_TokenEntry(timestamp=now, tokens=max(0, tokens), model=model))
+            entries.append(_TokenEntry(timestamp=now, usage=usage, model=model))
             if model is not None:
                 self._latest_model[pid] = model
             self._evict_old(entries, now)
@@ -74,8 +86,19 @@ class TokenRateTracker:
             # Reader-side eviction so a long-idle PID's stale window
             # never renders as a non-zero rate before the next write.
             self._evict_old(entries, now)
-            total = sum(entry.tokens for entry in entries)
-        return float(total) * (60.0 / self.WINDOW_SECONDS)
+            total = _sum_usage(entries)
+        return total.tokens * (60.0 / self.WINDOW_SECONDS)
+
+    def usage_per_min(self, pid: int) -> TokenUsage | None:
+        """Return structured usage summed over the trailing window."""
+        now = time.monotonic()
+        with self._lock:
+            entries = self._per_pid.get(pid)
+            if entries is None:
+                return None
+            self._evict_old(entries, now)
+            total = _sum_usage(entries)
+        return total.scaled(60.0 / self.WINDOW_SECONDS)
 
     def latest_model(self, pid: int) -> str | None:
         """Return the most recent non-``None`` model observed for ``pid``."""
@@ -102,3 +125,10 @@ TOKEN_RATE_TRACKER = TokenRateTracker()
 
 
 __all__ = ["TOKEN_RATE_TRACKER", "TokenRateTracker"]
+
+
+def _sum_usage(entries: deque[_TokenEntry]) -> TokenUsage:
+    total = TokenUsage()
+    for entry in entries:
+        total += entry.usage
+    return total
