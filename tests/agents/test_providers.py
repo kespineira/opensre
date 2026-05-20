@@ -128,6 +128,22 @@ class TestCommandHeuristic:
         assert provider_from_command("npm run --script aider-fixture") is None
         assert provider_from_command("node --inspect gemini-mock.js") is None
 
+    def test_node_launched_codex_js_is_classified(self) -> None:
+        assert (
+            provider_from_command("node /usr/local/bin/codex.js exec --model gpt-5-codex")
+            == "codex"
+        )
+
+    def test_node_launched_codex_mjs_and_cjs_are_classified(self) -> None:
+        assert provider_from_command("node /opt/codex/dist/codex.mjs") == "codex"
+        assert provider_from_command("nodejs /opt/codex/dist/codex.cjs --help") == "codex"
+
+    def test_node_with_unrelated_script_is_not_codex(self) -> None:
+        # Negative regression: argv[1] match is exact filename, not substring.
+        assert provider_from_command("node /opt/app/server.js") is None
+        assert provider_from_command("node --inspect codex-mock.js") is None
+        assert provider_from_command("node /opt/codex-utils/main.js") is None
+
 
 class TestUnknownProviders:
     """Unrecognized names fall through to ``None`` rather than raising."""

@@ -29,6 +29,10 @@ _CURSOR_FAMILY_TO_PROVIDER: dict[str, str] = {
     "cursor-agent": "cursor",
 }
 
+# Keep in sync with app/agents/discovery.py.
+_CODEX_LAUNCHER_TOKENS: frozenset[str] = frozenset({"codex", "codex.js", "codex.mjs", "codex.cjs"})
+_NODE_EXECUTABLES: frozenset[str] = frozenset({"node", "nodejs"})
+
 
 def provider_for(record: AgentRecord) -> str | None:
     """Return the canonical provider id for ``record``, or ``None`` if unknown.
@@ -78,8 +82,12 @@ def provider_from_command(command: str) -> str | None:
     # by the ``.cursor/extensions/...`` substring branch above.
     if executable in {"claude", "claude-code"}:
         return "claude-code"
-    if executable == "codex":
+    if executable in _CODEX_LAUNCHER_TOKENS:
         return "codex"
+    if executable in _NODE_EXECUTABLES and len(cmdline) >= 2:
+        second = _normalized_token(cmdline[1])
+        if second in _CODEX_LAUNCHER_TOKENS:
+            return "codex"
     if executable == "aider":
         return "aider"
     if executable == "gemini":
