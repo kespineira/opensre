@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import shlex
-from pathlib import Path
-
 from app.agents.registry import AgentRecord
 
 KNOWN_PROVIDERS: frozenset[str] = frozenset(
@@ -35,15 +32,22 @@ def provider_for(record: AgentRecord) -> str | None:
 
     Resolution order: persisted ``record.provider`` first, then the
     discovery-style name (``<provider>-<pid>``) stripped of its PID
-    suffix, then the stored command line. ``None`` lets the dashboard
-    render ``-``.
+    suffix, then a backfill via the shared strict command classifier
+    in :mod:`app.agents.discovery` (covers legacy ``agents.jsonl``
+    rows from before the ``provider`` field existed). ``None`` lets
+    the dashboard render ``-``.
     """
     if record.provider is not None:
         return record.provider
     from_name = provider_from_classified_name(record.name)
     if from_name is not None:
         return from_name
-    return provider_from_command(record.command)
+    # Function-scope import: ``discovery`` imports
+    # ``provider_from_classified_name`` from this module, so the
+    # reverse direction must stay out of module load.
+    from app.agents.discovery import classify_command_provider
+
+    return classify_command_provider(record.command)
 
 
 def provider_from_classified_name(name: str) -> str | None:
@@ -57,34 +61,15 @@ def provider_from_classified_name(name: str) -> str | None:
 
 
 def provider_from_command(command: str) -> str | None:
-    """Derive a canonical provider id from a stored process command."""
-    cmdline = _split_command(command)
-    if not cmdline:
-        return None
-    executable = _normalized_token(cmdline[0])
-    lower = command.lower()
+    """Legacy alias for :func:`app.agents.discovery.classify_command_provider`.
 
-    if ".cursor/extensions/anthropic.claude-code" in lower:
-        return "claude-code"
-    if "extension-host (agent-exec)" in lower:
-        return "cursor"
-    if "cursor-agent" in lower or "cursor agent" in lower:
-        return "cursor"
-    # Match only on argv[0] (the resolved executable name). A loose
-    # "X in tokens" fallback false-positives on argv like
-    # ``run-tests --model claude --format code`` and would wire an
-    # unrelated process to ``ClaudeCodeJsonlSource``. Every real CLI
-    # puts the binary in argv[0]; Cursor's wrapped variant is caught
-    # by the ``.cursor/extensions/...`` substring branch above.
-    if executable in {"claude", "claude-code"}:
-        return "claude-code"
-    if executable == "codex":
-        return "codex"
-    if executable == "aider":
-        return "aider"
-    if executable == "gemini":
-        return "gemini-cli"
-    return None
+    Kept for tests and external callers; the classification engine
+    now lives in ``discovery`` so register-time wiring and the
+    on-read backfill share one implementation.
+    """
+    from app.agents.discovery import classify_command_provider
+
+    return classify_command_provider(command)
 
 
 def _strip_pid_suffix(name: str) -> str:
@@ -94,17 +79,6 @@ def _strip_pid_suffix(name: str) -> str:
     if tail.isdigit():
         return base
     return name
-
-
-def _split_command(command: str) -> list[str]:
-    try:
-        return shlex.split(command)
-    except ValueError:
-        return command.split()
-
-
-def _normalized_token(value: str) -> str:
-    return Path(value.strip("'\"")).name.lower()
 
 
 __all__ = [

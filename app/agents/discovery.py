@@ -182,6 +182,39 @@ def display_command(command: str) -> str:
     return f"{collapsed[: _MAX_DISPLAY_COMMAND_LENGTH - 3]}..."
 
 
+def classify_command_provider(command: str) -> str | None:
+    """Return the canonical provider id for ``command``, or ``None``.
+
+    Strict argv[0]-only matching for claude / aider / gemini, plus
+    Cursor-extension substring rules, plus ``_is_codex_cmdline`` so
+    Node-launched Codex wrappers (``node /opt/codex.js`` and friends)
+    classify correctly without re-introducing the loose token-scan
+    false-positives that ``provider_from_command`` was tightened to
+    avoid.
+    """
+    cmdline = _split_command(command)
+    if not cmdline:
+        return None
+    executable = _normalized_token(cmdline[0])
+    lower = command.lower()
+
+    if ".cursor/extensions/anthropic.claude-code" in lower:
+        return "claude-code"
+    if "extension-host (agent-exec)" in lower:
+        return "cursor"
+    if "cursor-agent" in lower or "cursor agent" in lower:
+        return "cursor"
+    if executable in {"claude", "claude-code"}:
+        return "claude-code"
+    if executable == "aider":
+        return "aider"
+    if executable == "gemini":
+        return "gemini-cli"
+    if _is_codex_cmdline(cmdline):
+        return "codex"
+    return None
+
+
 def _current_process_rows() -> list[ProcessRow]:
     try:
         proc = subprocess.run(

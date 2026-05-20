@@ -128,6 +128,32 @@ class TestCommandHeuristic:
         assert provider_from_command("npm run --script aider-fixture") is None
         assert provider_from_command("node --inspect gemini-mock.js") is None
 
+    def test_node_launched_codex_classifies_via_provider_for(self) -> None:
+        # Manual register path: custom name + no stored provider +
+        # ``node codex.js`` command. The on-read backfill in
+        # ``provider_for`` must route through the strict classifier
+        # that supports the Node-Codex shape.
+        assert (
+            provider_for(_record(name="my-bot", command="node /usr/local/bin/codex.js exec"))
+            == "codex"
+        )
+
+    def test_node_launched_codex_with_intermediate_flag(self) -> None:
+        # ``node --inspect /usr/local/bin/codex.js exec`` is a real
+        # shape (debug-port flag before the script). ``argv[1]`` is a
+        # flag, not the codex script.
+        assert (
+            provider_from_command("node --inspect /usr/local/bin/codex.js exec --model gpt-5")
+            == "codex"
+        )
+
+    def test_node_with_unrelated_script_is_not_codex(self) -> None:
+        # Negative guard: only an exact ``codex.{js,mjs,cjs}`` filename
+        # counts; a substring like ``codex-utils/main.js`` must not
+        # match.
+        assert provider_from_command("node /opt/codex-utils/main.js") is None
+        assert provider_from_command("node /opt/app/server.js") is None
+
 
 class TestUnknownProviders:
     """Unrecognized names fall through to ``None`` rather than raising."""

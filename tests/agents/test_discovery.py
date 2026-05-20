@@ -7,7 +7,12 @@ from pathlib import Path
 import pytest
 
 from app.agents import discovery
-from app.agents.discovery import ProcessRow, discover_agents, registered_and_discovered_agents
+from app.agents.discovery import (
+    ProcessRow,
+    classify_command_provider,
+    discover_agents,
+    registered_and_discovered_agents,
+)
 from app.agents.registry import AgentRecord, AgentRegistry
 
 
@@ -482,3 +487,53 @@ def test_registered_and_discovered_agents_returns_sorted_rows(
     records = registered_and_discovered_agents(registry)
 
     assert [(record.name, record.pid) for record in records] == [("aider", 10), ("z-manual", 20)]
+
+
+class TestClassifyCommandProvider:
+    def test_native_codex_binary(self) -> None:
+        assert classify_command_provider("/opt/bin/codex exec") == "codex"
+
+    def test_node_launched_codex_js(self) -> None:
+        assert (
+            classify_command_provider("node /usr/local/bin/codex.js exec --model gpt-5-codex")
+            == "codex"
+        )
+
+    def test_node_launched_codex_with_intermediate_flag(self) -> None:
+        assert classify_command_provider("node --inspect /usr/local/bin/codex.js exec") == "codex"
+
+    def test_node_launched_codex_mjs_and_cjs(self) -> None:
+        assert classify_command_provider("node /opt/codex/dist/codex.mjs") == "codex"
+        assert classify_command_provider("nodejs /opt/codex/dist/codex.cjs --help") == "codex"
+
+    def test_node_with_unrelated_script_is_not_codex(self) -> None:
+        assert classify_command_provider("node /opt/codex-utils/main.js") is None
+        assert classify_command_provider("node /opt/app/server.js") is None
+
+    def test_claude_argv0(self) -> None:
+        assert classify_command_provider("claude --dangerously-skip-permissions") == "claude-code"
+
+    def test_cursor_extension_substring(self) -> None:
+        assert (
+            classify_command_provider(
+                "/Users/me/.cursor/extensions/anthropic.claude-code/resources/"
+                "native-binary/claude --output-format stream-json"
+            )
+            == "claude-code"
+        )
+
+    def test_aider_argv0(self) -> None:
+        assert classify_command_provider("aider --model gpt-4o") == "aider"
+
+    def test_gemini_argv0(self) -> None:
+        assert classify_command_provider("gemini chat") == "gemini-cli"
+
+    def test_unknown_command_returns_none(self) -> None:
+        assert classify_command_provider("python -m app.worker") is None
+
+    def test_empty_command_returns_none(self) -> None:
+        assert classify_command_provider("") is None
+
+    def test_loose_claude_code_argv_does_not_false_positive(self) -> None:
+        # Hardened against the old ``"claude" in tokens and "code" in tokens`` check.
+        assert classify_command_provider("run-tests --model claude --format code --verbose") is None
