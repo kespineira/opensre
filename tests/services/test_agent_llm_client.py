@@ -30,6 +30,9 @@ def _install_fake_anthropic(monkeypatch: pytest.MonkeyPatch) -> types.SimpleName
     class PermissionDeniedError(Exception):
         pass
 
+    class RateLimitError(Exception):
+        pass
+
     class InternalServerError(Exception):
         def __init__(self, message: str, body: dict | None = None) -> None:
             super().__init__(message)
@@ -47,6 +50,7 @@ def _install_fake_anthropic(monkeypatch: pytest.MonkeyPatch) -> types.SimpleName
     fake_module.BadRequestError = BadRequestError
     fake_module.NotFoundError = NotFoundError
     fake_module.PermissionDeniedError = PermissionDeniedError
+    fake_module.RateLimitError = RateLimitError
     fake_module.InternalServerError = InternalServerError
     fake_module.Anthropic = Anthropic
     fake_module.AnthropicBedrock = AnthropicBedrock
@@ -167,6 +171,52 @@ def test_internal_server_error_without_model_data_is_retried(
     assert call_count == 3, "transient 500 errors should be retried"
 
 
+def test_anthropic_rate_limit_error_is_not_retried(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_anthropic = _install_fake_anthropic(monkeypatch)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setattr("app.services.agent_llm_client.time.sleep", lambda _: None)
+
+    call_count = 0
+
+    def raise_rate_limit(**_: object) -> object:
+        nonlocal call_count
+        call_count += 1
+        raise fake_anthropic.RateLimitError("slow down")
+
+    client = AnthropicAgentClient(model="claude-sonnet-4-6")
+    client._client = types.SimpleNamespace(messages=types.SimpleNamespace(create=raise_rate_limit))
+
+    with pytest.raises(RuntimeError, match="Anthropic rate limit exceeded"):
+        client.invoke(messages=[{"role": "user", "content": "hi"}])
+
+    assert call_count == 1, "rate limit should not be retried"
+
+
+def test_bedrock_rate_limit_error_is_not_retried(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_anthropic = _install_fake_anthropic(monkeypatch)
+    monkeypatch.setenv("AWS_REGION", "us-west-2")
+    monkeypatch.setattr("app.services.agent_llm_client.time.sleep", lambda _: None)
+
+    call_count = 0
+
+    def raise_rate_limit(**_: object) -> object:
+        nonlocal call_count
+        call_count += 1
+        raise fake_anthropic.RateLimitError("slow down")
+
+    client = BedrockAgentClient(model="us.anthropic.claude-sonnet-4-6")
+    client._client = types.SimpleNamespace(messages=types.SimpleNamespace(create=raise_rate_limit))
+
+    with pytest.raises(RuntimeError, match="Bedrock rate limit exceeded"):
+        client.invoke(messages=[{"role": "user", "content": "hi"}])
+
+    assert call_count == 1, "rate limit should not be retried"
+
+
 def _install_fake_openai(monkeypatch: pytest.MonkeyPatch) -> types.SimpleNamespace:
     fake_module = types.SimpleNamespace()
 
@@ -179,6 +229,12 @@ def _install_fake_openai(monkeypatch: pytest.MonkeyPatch) -> types.SimpleNamespa
     class NotFoundError(Exception):
         pass
 
+    class RateLimitError(Exception):
+        pass
+
+    class PermissionDeniedError(Exception):
+        pass
+
     class OpenAI:
         def __init__(self, **_: object) -> None:
             self.chat = types.SimpleNamespace(
@@ -188,6 +244,8 @@ def _install_fake_openai(monkeypatch: pytest.MonkeyPatch) -> types.SimpleNamespa
     fake_module.AuthenticationError = AuthenticationError
     fake_module.BadRequestError = BadRequestError
     fake_module.NotFoundError = NotFoundError
+    fake_module.RateLimitError = RateLimitError
+    fake_module.PermissionDeniedError = PermissionDeniedError
     fake_module.OpenAI = OpenAI
     monkeypatch.setitem(sys.modules, "openai", fake_module)
     return fake_module
@@ -369,6 +427,60 @@ def test_openai_standard_models_use_max_tokens(
         assert "max_completion_tokens" not in captured, (
             f"{model} must not send max_completion_tokens"
         )
+
+
+def test_openai_rate_limit_error_is_not_retried(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_openai = _install_fake_openai(monkeypatch)
+    monkeypatch.setattr("app.services.agent_llm_client.time.sleep", lambda _: None)
+
+    call_count = 0
+
+    def raise_rate_limit(**_: object) -> object:
+        nonlocal call_count
+        call_count += 1
+        raise fake_openai.RateLimitError("slow down")
+
+    client = OpenAIAgentClient.__new__(OpenAIAgentClient)
+    client._client = types.SimpleNamespace(
+        chat=types.SimpleNamespace(completions=types.SimpleNamespace(create=raise_rate_limit))
+    )
+    client._model = "gpt-4o"
+    client._max_tokens = 512
+
+    with pytest.raises(RuntimeError, match="OpenAI rate limit exceeded"):
+        client.invoke(messages=[{"role": "user", "content": "hi"}])
+
+    assert call_count == 1, "429 should not retry"
+
+
+def test_openai_permission_denied_error_is_not_retried(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_openai = _install_fake_openai(monkeypatch)
+    monkeypatch.setattr("app.services.agent_llm_client.time.sleep", lambda _: None)
+
+    call_count = 0
+
+    def raise_permission_denied(**_: object) -> object:
+        nonlocal call_count
+        call_count += 1
+        raise fake_openai.PermissionDeniedError("forbidden")
+
+    client = OpenAIAgentClient.__new__(OpenAIAgentClient)
+    client._client = types.SimpleNamespace(
+        chat=types.SimpleNamespace(
+            completions=types.SimpleNamespace(create=raise_permission_denied)
+        )
+    )
+    client._model = "gpt-4o"
+    client._max_tokens = 512
+
+    with pytest.raises(RuntimeError, match="OpenAI request forbidden"):
+        client.invoke(messages=[{"role": "user", "content": "hi"}])
+
+    assert call_count == 1, "403 should not retry"
 
 
 def test_sdk_type_error_for_missing_api_key_fails_fast(
@@ -676,3 +788,91 @@ def test_cli_backed_agent_client_filtered_tool_calls_fall_back_to_text_response(
 
     assert not result.has_tool_calls
     assert result.content == raw
+
+
+def test_bedrock_bad_request_cross_region_inference_gives_helpful_message(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_anthropic = _install_fake_anthropic(monkeypatch)
+    monkeypatch.setenv("AWS_REGION", "us-east-1")
+
+    client = BedrockAgentClient(model="anthropic.claude-sonnet-4-20250514-v1:0")
+    bedrock_error_body = (
+        "Error code: 400 - {'message': \"Invocation of model ID "
+        "anthropic.claude-sonnet-4-20250514-v1:0 with on-demand throughput isn't supported. "
+        'Retry your request with the ID or ARN of an inference profile that contains this model."}'
+    )
+
+    def raise_bad_request(**_: object) -> object:
+        raise fake_anthropic.BadRequestError(bedrock_error_body)
+
+    client._client = types.SimpleNamespace(messages=types.SimpleNamespace(create=raise_bad_request))
+
+    with pytest.raises(RuntimeError) as exc:
+        client.invoke(messages=[{"role": "user", "content": "hi"}])
+
+    message = str(exc.value)
+    assert "requires a cross-region inference profile" in message
+    assert "Try prefixing with 'us.'" in message
+    assert "BEDROCK_REASONING_MODEL" in message
+
+
+def test_bedrock_bad_request_generic_error_uses_default_message(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_anthropic = _install_fake_anthropic(monkeypatch)
+    monkeypatch.setenv("AWS_REGION", "us-east-1")
+
+    client = BedrockAgentClient(model="us.anthropic.claude-sonnet-4-6")
+
+    def raise_bad_request(**_: object) -> object:
+        raise fake_anthropic.BadRequestError("content policy violation")
+
+    client._client = types.SimpleNamespace(messages=types.SimpleNamespace(create=raise_bad_request))
+
+    with pytest.raises(RuntimeError) as exc:
+        client.invoke(messages=[{"role": "user", "content": "hi"}])
+
+    message = str(exc.value)
+    assert "Bedrock request rejected (HTTP 400)" in message
+    assert "cross-region" not in message
+
+
+def test_openai_unexpected_response_type_raises_runtime_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When an OpenAI-compatible provider returns a non-ChatCompletion object
+    invoke() must raise RuntimeError instead of an opaque AttributeError."""
+    _install_fake_openai(monkeypatch)
+
+    client = OpenAIAgentClient.__new__(OpenAIAgentClient)
+    client._client = types.SimpleNamespace(
+        chat=types.SimpleNamespace(
+            completions=types.SimpleNamespace(create=lambda **_: "unexpected string response")
+        )
+    )
+    client._model = "some-provider/model"
+    client._max_tokens = 512
+
+    with pytest.raises(RuntimeError, match="unexpected response"):
+        client.invoke(messages=[{"role": "user", "content": "hi"}])
+
+
+def test_openai_empty_choices_raises_runtime_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When the provider returns a response with an empty choices list
+    invoke() must raise RuntimeError."""
+    _install_fake_openai(monkeypatch)
+
+    client = OpenAIAgentClient.__new__(OpenAIAgentClient)
+    client._client = types.SimpleNamespace(
+        chat=types.SimpleNamespace(
+            completions=types.SimpleNamespace(create=lambda **_: types.SimpleNamespace(choices=[]))
+        )
+    )
+    client._model = "some-provider/model"
+    client._max_tokens = 512
+
+    with pytest.raises(RuntimeError, match="unexpected response"):
+        client.invoke(messages=[{"role": "user", "content": "hi"}])

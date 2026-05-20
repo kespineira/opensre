@@ -14,6 +14,12 @@ class HermesBackend(Protocol):
     def get_session_log(self, session_id: str = "", **kwargs: Any) -> dict[str, Any]:
         pass
 
+    def get_provider_traffic(self, session_id: str = "", **kwargs: Any) -> dict[str, Any]:
+        pass
+
+    def get_config(self, session_id: str = "", **kwargs: Any) -> dict[str, Any]:
+        pass
+
     def get_message_history(self, session_id: str = "", **kwargs: Any) -> dict[str, Any]:
         pass
 
@@ -27,6 +33,18 @@ class HermesBackend(Protocol):
         pass
 
     def get_session_topology(self, session_id: str = "", **kwargs: Any) -> dict[str, Any]:
+        pass
+
+    def get_orchestration_state(self, session_id: str = "", **kwargs: Any) -> dict[str, Any]:
+        pass
+
+    def get_routing_decisions(self, session_id: str = "", **kwargs: Any) -> dict[str, Any]:
+        pass
+
+    def get_memory_state(self, session_id: str = "", **kwargs: Any) -> dict[str, Any]:
+        pass
+
+    def get_filesystem_state(self, session_id: str = "", **kwargs: Any) -> dict[str, Any]:
         pass
 
 
@@ -46,6 +64,34 @@ class FixtureHermesBackend:
             "available": True,
             "session_id": session_id or evidence.get("session_id", ""),
             "events": list(evidence.get("events", [])),
+            "error": None,
+        }
+
+    def get_provider_traffic(self, session_id: str = "", **_: Any) -> dict[str, Any]:
+        evidence = self._fixture.evidence.hermes_provider_traffic
+        if evidence is None:
+            return self._missing("provider_traffic")
+        return {
+            "source": "hermes",
+            "available": True,
+            "session_id": session_id or str(evidence.get("session_id", "")),
+            "calls": list(evidence.get("calls", [])),
+            "error": None,
+        }
+
+    def get_config(self, session_id: str = "", **_: Any) -> dict[str, Any]:
+        evidence = self._fixture.evidence.hermes_config
+        if evidence is None:
+            return self._missing("config")
+        return {
+            "source": "hermes",
+            "available": True,
+            "session_id": session_id,
+            "provider": str(evidence.get("provider", "")),
+            "model": str(evidence.get("model", "")),
+            "region": str(evidence.get("region", "")),
+            "providers": list(evidence.get("providers", [])),
+            "transport": dict(evidence.get("transport", {})),
             "error": None,
         }
 
@@ -118,6 +164,8 @@ class FixtureHermesBackend:
             "last_progress_ts": last_progress_ts,
             "is_blocked": computed_blocked,
             "blocking_call": evidence.get("blocking_call"),
+            "imds_fingerprint": evidence.get("imds_fingerprint"),
+            "resolved_aws_role_arn": evidence.get("resolved_aws_role_arn"),
             "error": None,
         }
 
@@ -144,6 +192,66 @@ class FixtureHermesBackend:
             "session_id": session_id or str(evidence.get("visible_session_id", "")),
             "visible_session_id": str(evidence.get("visible_session_id", "")),
             "all_sessions": list(evidence.get("all_sessions", [])),
+            "error": None,
+        }
+
+    def get_orchestration_state(self, session_id: str = "", **_: Any) -> dict[str, Any]:
+        evidence = self._fixture.evidence.hermes_orchestration_state
+        if evidence is None:
+            return self._missing("orchestration_state")
+        return {
+            "source": "hermes",
+            "available": True,
+            "session_id": session_id,
+            "declared_roles": list(evidence.get("declared_roles", [])),
+            "declared_topology": str(evidence.get("declared_topology", "")),
+            "observed": dict(evidence.get("observed", {})),
+            "error": None,
+        }
+
+    def get_routing_decisions(self, session_id: str = "", **_: Any) -> dict[str, Any]:
+        evidence = self._fixture.evidence.hermes_routing_decisions
+        if evidence is None:
+            return self._missing("routing_decisions")
+        return {
+            "source": "hermes",
+            "available": True,
+            "session_id": session_id,
+            "config": dict(evidence.get("config", {})),
+            "calls": list(evidence.get("calls", [])),
+            "error": None,
+        }
+
+    def get_memory_state(self, session_id: str = "", **_: Any) -> dict[str, Any]:
+        evidence = self._fixture.evidence.hermes_memory_state
+        if evidence is None:
+            return self._missing("memory_state")
+        return {
+            "source": "hermes",
+            "available": True,
+            "session_id": session_id,
+            "backend": str(evidence.get("backend", "")),
+            "backend_status": str(evidence.get("backend_status", "")),
+            "last_read_ts": evidence.get("last_read_ts"),
+            "last_write_ts": evidence.get("last_write_ts"),
+            "last_parse_error": evidence.get("last_parse_error"),
+            "fallback_active": bool(evidence.get("fallback_active", False)),
+            "fallback_reason": evidence.get("fallback_reason"),
+            "error": None,
+        }
+
+    def get_filesystem_state(self, session_id: str = "", **_: Any) -> dict[str, Any]:
+        evidence = self._fixture.evidence.hermes_filesystem_state
+        if evidence is None:
+            return self._missing("filesystem_state")
+        return {
+            "source": "hermes",
+            "available": True,
+            "session_id": session_id,
+            "hermes_home": str(evidence.get("hermes_home", "")),
+            "files": list(evidence.get("files", [])),
+            "backups_present": bool(evidence.get("backups_present", False)),
+            "vcs_present": bool(evidence.get("vcs_present", False)),
             "error": None,
         }
 
