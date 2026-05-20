@@ -1,10 +1,13 @@
-"""Canonical provider-id constants and discovery-style name resolution.
+"""Canonical provider IDs and discovery-name to provider-ID mapping.
 
-Lives in its own module so :mod:`app.agents.discovery` (which
-classifies commands and produces canonical provider names) and
-:mod:`app.agents.providers` (which resolves an ``AgentRecord`` to a
-provider id, calling back into discovery for the strict command
-classifier) can both depend on it without forming an import cycle.
+The provider-ID set is the shared contract every layer of the agents
+stack agrees on: discovery classifies commands into these names,
+the token source and meter registries key off the same names, and
+``provider_for`` resolves an ``AgentRecord`` to one of them. Keeping
+the constants and the small name-resolution helper here lets all of
+those consumers depend on a single thin module instead of pulling in
+the heavier discovery (``ps``, process dedupe, Cursor terminal
+metadata) just to read a frozenset.
 """
 
 from __future__ import annotations
