@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from app.agents.probe import process_has_open_codex_rollout
-from app.agents.providers import provider_from_classified_name
+from app.agents.provider_ids import provider_from_classified_name
 from app.agents.registry import AgentRecord, AgentRegistry
 
 logger = logging.getLogger(__name__)
