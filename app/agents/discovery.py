@@ -48,11 +48,9 @@ _CLAUDE_CODE_CLI_ARG_TOKENS: frozenset[str] = frozenset(
 )
 _CLAUDE_DESKTOP_PATH_HINTS: tuple[str, ...] = (
     "claude.app/contents/",
-    "/macos/claude",
-    "claude helper",
-    "claude-desktop",
+    "/claude-desktop/",
     "/snap/claude/",
-    "/usr/lib/claude-desktop",
+    "/usr/lib/claude-desktop/",
     "/.mount_claude",
     "\\program files\\claude\\",
     "\\appdata\\local\\programs\\claude\\",
@@ -420,6 +418,10 @@ def _classify_agent(
             return None
         if _claude_code_cli_matches_cmdline(cmdline):
             return "claude-code"
+        # Intentional fall-through: an unrecognised `claude …` shape still
+        # reaches the noise / loose-classification path below so that `--all`
+        # surfaces it via the `claude` token signature. Do not add an early
+        # `return None` here — it would silently break `opensre agents scan --all`.
 
     if _is_noise_process(process_name, cmdline):
         return _classify_agent_loose(process_name, cmdline) if include_all else None
@@ -458,9 +460,13 @@ def _is_claude_desktop_artifact(cmdline: list[str]) -> bool:
     # Match desktop-bundle / installer hints against argv[0] only — never against
     # the full command. Prompt-bearing flags (e.g. `claude --print "inspect
     # /Applications/Claude.app/..."`) must not falsely trip the negative filter.
+    #
+    # The trailing-slash sentinel lets `/claude-desktop/` match both directories
+    # (`/usr/lib/claude-desktop/...`) and end-of-string binaries
+    # (`/.../bin/claude-desktop`) while rejecting `/.../my-claude-desktop-tools/`.
     if not cmdline:
         return False
-    lowered = cmdline[0].lower()
+    lowered = cmdline[0].lower() + "/"
     return any(hint in lowered for hint in _CLAUDE_DESKTOP_PATH_HINTS)
 
 

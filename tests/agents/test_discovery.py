@@ -369,6 +369,10 @@ def test_is_claude_desktop_artifact_recognises_known_packaging_paths(
             "--print",
             "inspect /Applications/Claude.app/Contents/MacOS/Claude logs",
         ],
+        ["/Users/me/macos/claude"],
+        ["/opt/tools/macos/claude"],
+        ["/home/user/my-claude-desktop-wrapper/bin/claude"],
+        ["/usr/lib/claude-desktop-tools/cli/claude"],
     ],
 )
 def test_is_claude_desktop_artifact_passes_through_cli_invocations(
