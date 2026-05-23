@@ -386,6 +386,156 @@ def test_is_claude_desktop_artifact_passes_through_cli_invocations(
     assert discovery._is_claude_desktop_artifact(cmdline) is False
 
 
+def test_discover_agent_processes_rejects_codex_desktop_main_in_strict_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(discovery.os, "getpid", lambda: 10)
+    monkeypatch.setattr(
+        discovery,
+        "_current_process_rows",
+        lambda: [
+            ProcessRow(pid=801, command="/Applications/Codex.app/Contents/MacOS/Codex"),
+        ],
+    )
+
+    assert discovery.discover_agent_processes() == []
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "/Applications/Codex.app/Contents/MacOS/Codex",
+        "/snap/codex/current/usr/bin/codex",
+        "/tmp/.mount_Codex_xyz123/usr/bin/codex",
+        "/var/lib/flatpak/app/com.openai.codex/current/active/files/bin/codex",
+        "'C:\\Program Files\\Codex\\Codex.exe'",
+        "'C:\\Users\\me\\AppData\\Local\\Programs\\codex\\Codex.exe'",
+    ],
+)
+def test_discover_agent_processes_rejects_codex_desktop_cross_platform_paths(
+    monkeypatch: pytest.MonkeyPatch, command: str
+) -> None:
+    monkeypatch.setattr(discovery.os, "getpid", lambda: 10)
+    monkeypatch.setattr(
+        discovery,
+        "_current_process_rows",
+        lambda: [ProcessRow(pid=802, command=command)],
+    )
+
+    assert discovery.discover_agent_processes() == []
+    assert discovery.discover_agent_processes(include_all=True) == []
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "/Applications/Cursor.app/Contents/MacOS/Cursor",
+        "/snap/cursor/current/usr/bin/cursor",
+        "/tmp/.mount_Cursor_xyz123/usr/bin/cursor",
+        "/var/lib/flatpak/app/com.cursor.cursor/current/active/files/bin/cursor",
+        "'C:\\Program Files\\Cursor\\Cursor.exe'",
+        "'C:\\Users\\me\\AppData\\Local\\Programs\\cursor\\Cursor.exe'",
+    ],
+)
+def test_discover_agent_processes_rejects_cursor_desktop_cross_platform_paths(
+    monkeypatch: pytest.MonkeyPatch, command: str
+) -> None:
+    monkeypatch.setattr(discovery.os, "getpid", lambda: 10)
+    monkeypatch.setattr(
+        discovery,
+        "_current_process_rows",
+        lambda: [ProcessRow(pid=803, command=command)],
+    )
+
+    assert discovery.discover_agent_processes() == []
+    assert discovery.discover_agent_processes(include_all=True) == []
+
+
+@pytest.mark.parametrize(
+    "cmdline",
+    [
+        ["/Applications/Codex.app/Contents/MacOS/Codex"],
+        ["/snap/codex/current/usr/bin/codex"],
+        ["/tmp/.mount_Codex_xyz123/usr/bin/codex"],
+        ["/var/lib/flatpak/app/com.openai.codex/current/active/files/bin/codex"],
+        ["C:\\Program Files\\Codex\\Codex.exe"],
+        ["C:\\Users\\me\\AppData\\Local\\Programs\\codex\\Codex.exe"],
+    ],
+)
+def test_is_codex_desktop_artifact_recognises_known_packaging_paths(
+    cmdline: list[str],
+) -> None:
+    assert discovery._is_codex_desktop_artifact(cmdline) is True
+
+
+@pytest.mark.parametrize(
+    "cmdline",
+    [
+        ["codex"],
+        ["codex", "--resume", "id"],
+        ["/usr/local/bin/codex"],
+        ["/Users/me/.local/bin/codex"],
+        ["/opt/Codex/codex"],
+        ["/opt/codex-cli/bin/codex"],
+        ["node", "/opt/codex.js"],
+        [
+            "codex",
+            "--print",
+            "inspect /Applications/Codex.app/Contents/MacOS/Codex logs",
+        ],
+        # Electron helper paths inside the bundle stay eligible for the loose
+        # matcher — only the main `<bundle>/Contents/MacOS/<binary>` is blocked.
+        ["/Applications/Codex.app/Contents/Frameworks/Codex Helper"],
+    ],
+)
+def test_is_codex_desktop_artifact_passes_through_cli_invocations(
+    cmdline: list[str],
+) -> None:
+    assert discovery._is_codex_desktop_artifact(cmdline) is False
+
+
+@pytest.mark.parametrize(
+    "cmdline",
+    [
+        ["/Applications/Cursor.app/Contents/MacOS/Cursor"],
+        ["/snap/cursor/current/usr/bin/cursor"],
+        ["/tmp/.mount_Cursor_xyz123/usr/bin/cursor"],
+        ["/var/lib/flatpak/app/com.cursor.cursor/current/active/files/bin/cursor"],
+        ["C:\\Program Files\\Cursor\\Cursor.exe"],
+        ["C:\\Users\\me\\AppData\\Local\\Programs\\cursor\\Cursor.exe"],
+    ],
+)
+def test_is_cursor_desktop_artifact_recognises_known_packaging_paths(
+    cmdline: list[str],
+) -> None:
+    assert discovery._is_cursor_desktop_artifact(cmdline) is True
+
+
+@pytest.mark.parametrize(
+    "cmdline",
+    [
+        ["cursor-agent"],
+        ["cursor-agent-cli"],
+        ["/usr/local/bin/cursor-agent"],
+        ["/opt/Cursor/cursor"],
+        [
+            "cursor-agent",
+            "--print",
+            "/Applications/Cursor.app/Contents/MacOS/Cursor",
+        ],
+        # Cursor's AI agent ships as a Helper inside the .app bundle. The
+        # narrow `cursor.app/contents/macos/cursor/` hint must let helper
+        # subprocess paths through so they remain eligible for the loose
+        # matcher (see `test_…_all_mode_still_keeps_non_desktop_loose_matches`).
+        ["/Applications/Cursor.app/Contents/Frameworks/Cursor Helper (Plugin)"],
+    ],
+)
+def test_is_cursor_desktop_artifact_passes_through_cli_invocations(
+    cmdline: list[str],
+) -> None:
+    assert discovery._is_cursor_desktop_artifact(cmdline) is False
+
+
 def test_discover_agents_legacy_path_matches_bare_claude_via_cursor_terminal(
     tmp_path: Path,
 ) -> None:
@@ -407,6 +557,17 @@ def test_discover_agents_legacy_path_rejects_claude_desktop_main(tmp_path: Path)
     records = discover_agents(
         process_rows=[
             ProcessRow(pid=901, command="/Applications/Claude.app/Contents/MacOS/Claude"),
+        ],
+        cursor_projects_dir=tmp_path,
+    )
+
+    assert records == []
+
+
+def test_discover_agents_legacy_path_rejects_codex_desktop_main(tmp_path: Path) -> None:
+    records = discover_agents(
+        process_rows=[
+            ProcessRow(pid=902, command="/Applications/Codex.app/Contents/MacOS/Codex"),
         ],
         cursor_projects_dir=tmp_path,
     )

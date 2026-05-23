@@ -56,6 +56,28 @@ _CLAUDE_DESKTOP_PATH_HINTS: tuple[str, ...] = (
     "\\program files\\claude\\",
     "\\appdata\\local\\programs\\claude\\",
 )
+# macOS hints target the main bundle binary at
+# `<App>.app/Contents/MacOS/<App>` only, not the whole bundle. This keeps
+# Electron helper processes living under `<App>.app/Contents/Frameworks/`
+# eligible for the loose matcher — e.g. Cursor's agent runs as a
+# `Cursor Helper (Plugin)` subprocess that callers still expect to see
+# surfaced as `cursor` in `opensre agents scan --all`.
+_CODEX_DESKTOP_PATH_HINTS: tuple[str, ...] = (
+    "codex.app/contents/macos/codex/",
+    "/snap/codex/",
+    "/.mount_codex",
+    "/var/lib/flatpak/app/com.openai.codex/",
+    "\\program files\\codex\\",
+    "\\appdata\\local\\programs\\codex\\",
+)
+_CURSOR_DESKTOP_PATH_HINTS: tuple[str, ...] = (
+    "cursor.app/contents/macos/cursor/",
+    "/snap/cursor/",
+    "/.mount_cursor",
+    "/var/lib/flatpak/app/com.cursor.cursor/",
+    "\\program files\\cursor\\",
+    "\\appdata\\local\\programs\\cursor\\",
+)
 
 
 @dataclass(frozen=True)
@@ -419,7 +441,7 @@ def _agent_name_for_command(command: str) -> str | None:
         return "cursor-agent"
     if not _is_claude_desktop_artifact(cmdline) and _claude_code_cli_matches_cmdline(cmdline):
         return "claude-code"
-    if _is_codex_command(command):
+    if not _is_codex_desktop_artifact(cmdline) and _is_codex_command(command):
         return "codex"
     if _has_command_token(lower, "aider"):
         return "aider"
@@ -476,6 +498,8 @@ def _classify_agent(
     if executable == "aider":
         return "aider"
     if executable == "codex":
+        if _is_codex_desktop_artifact(cmdline):
+            return None
         return "codex"
     if executable == "gemini":
         return "gemini-cli"
@@ -487,7 +511,11 @@ def _classify_agent(
 
 
 def _classify_agent_loose(process_name: str, cmdline: list[str]) -> str | None:
-    if _is_claude_desktop_artifact(cmdline):
+    if (
+        _is_claude_desktop_artifact(cmdline)
+        or _is_codex_desktop_artifact(cmdline)
+        or _is_cursor_desktop_artifact(cmdline)
+    ):
         return None
     haystack = f"{process_name} {' '.join(cmdline)}".lower()
     tokens = {_normalized_token(part) for part in cmdline}
@@ -503,18 +531,31 @@ def _classify_agent_loose(process_name: str, cmdline: list[str]) -> str | None:
     return None
 
 
-def _is_claude_desktop_artifact(cmdline: list[str]) -> bool:
+def _matches_desktop_path_hints(cmdline: list[str], hints: tuple[str, ...]) -> bool:
     # Match desktop-bundle / installer hints against argv[0] only — never against
     # the full command. Prompt-bearing flags (e.g. `claude --print "inspect
     # /Applications/Claude.app/..."`) must not falsely trip the negative filter.
     #
-    # The trailing-slash sentinel lets `/claude-desktop/` match both directories
-    # (`/usr/lib/claude-desktop/...`) and end-of-string binaries
-    # (`/.../bin/claude-desktop`) while rejecting `/.../my-claude-desktop-tools/`.
+    # The trailing-slash sentinel lets directory hints (e.g. `/<agent>-desktop/`)
+    # match both directories (`/usr/lib/<agent>-desktop/...`) and end-of-string
+    # binaries (`/.../bin/<agent>-desktop`) while rejecting substrings like
+    # `/.../my-<agent>-desktop-tools/`.
     if not cmdline:
         return False
     lowered = cmdline[0].lower() + "/"
-    return any(hint in lowered for hint in _CLAUDE_DESKTOP_PATH_HINTS)
+    return any(hint in lowered for hint in hints)
+
+
+def _is_claude_desktop_artifact(cmdline: list[str]) -> bool:
+    return _matches_desktop_path_hints(cmdline, _CLAUDE_DESKTOP_PATH_HINTS)
+
+
+def _is_codex_desktop_artifact(cmdline: list[str]) -> bool:
+    return _matches_desktop_path_hints(cmdline, _CODEX_DESKTOP_PATH_HINTS)
+
+
+def _is_cursor_desktop_artifact(cmdline: list[str]) -> bool:
+    return _matches_desktop_path_hints(cmdline, _CURSOR_DESKTOP_PATH_HINTS)
 
 
 def _is_noise_process(process_name: str, cmdline: list[str]) -> bool:

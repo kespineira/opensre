@@ -55,12 +55,25 @@ desktop artifacts and never labeled as `claude-code`. The negative filter
 matches against `argv[0]` only, so a CLI installed under a Claude-flavored
 prefix (for example `/opt/Claude/claude`) is still surfaced.
 
+The same cross-platform desktop filter also rejects **Codex Desktop**
+(`Codex.app/Contents/MacOS/Codex`, `/snap/codex/`, `/.mount_Codex…`,
+Flatpak `com.openai.codex`, Windows `Program Files\Codex\` and
+`AppData\Local\Programs\codex\`) and **Cursor Desktop**
+(`Cursor.app/Contents/MacOS/Cursor`, `/snap/cursor/`, `/.mount_Cursor…`,
+Flatpak `com.cursor.cursor`, Windows `Program Files\Cursor\` and
+`AppData\Local\Programs\cursor\`), so neither GUI is mislabeled as the
+`codex` or `cursor` CLI in strict or `--all` mode. The macOS hints
+deliberately target only the main bundle binary so Electron helper
+subprocesses (e.g. `Cursor Helper (Plugin)` running Cursor's AI agent)
+remain eligible for the loose `--all` matcher.
+
 ### Loose mode (`--all`)
 
 `opensre agents scan --all` relaxes the argv requirements so that helper and
 broker processes whose argv contains agent-shaped tokens are also surfaced.
-The Claude Desktop / Electron negative filter is still applied — `--all`
-never mislabels desktop processes as `claude-code`.
+The Claude / Codex / Cursor Desktop negative filter is still applied —
+`--all` never mislabels desktop processes as `claude-code`, `codex`, or
+`cursor`.
 
 ### Registering discovered sessions
 
