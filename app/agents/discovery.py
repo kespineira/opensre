@@ -443,6 +443,10 @@ def _agent_name_for_command(command: str) -> str | None:
         return "claude-code"
     if not _is_codex_desktop_artifact(cmdline) and _is_codex_command(command):
         return "codex"
+    # No cursor desktop guard here: this function never returns a bare
+    # `cursor` label (only `cursor-agent` / `cursor-agent-exec` / `cursor-
+    # claude-code`), so Cursor.app cannot reach a labelling path. Add one
+    # if a bare-`cursor` return is ever introduced.
     if _has_command_token(lower, "aider"):
         return "aider"
     if _has_command_token(lower, "gemini"):
@@ -505,6 +509,12 @@ def _classify_agent(
         return "gemini-cli"
     if executable in {"cursor-agent", "cursor-agent-cli"}:
         return "cursor"
+    if executable == "cursor" and _is_cursor_desktop_artifact(cmdline):
+        # Belt-and-suspenders: no current strict branch returns "cursor" for a
+        # bare `cursor` executable (Cursor's CLI is `cursor-agent`), so this is
+        # a no-op today. Kept explicit so a future `if executable == "cursor":
+        # return "cursor"` cannot silently reintroduce the desktop mislabel.
+        return None
     if include_all:
         return _classify_agent_loose(process_name, cmdline)
     return None

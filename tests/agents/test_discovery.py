@@ -401,6 +401,25 @@ def test_discover_agent_processes_rejects_codex_desktop_main_in_strict_mode(
     assert discovery.discover_agent_processes() == []
 
 
+def test_discover_agent_processes_rejects_cursor_desktop_main_in_strict_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Strict-mode regression guard: no current branch in `_classify_agent`
+    # returns "cursor" for `executable == "cursor"`, but the explicit guard
+    # next to the `cursor-agent` / `cursor-agent-cli` block must keep
+    # Cursor.app from ever being labelled in strict mode.
+    monkeypatch.setattr(discovery.os, "getpid", lambda: 10)
+    monkeypatch.setattr(
+        discovery,
+        "_current_process_rows",
+        lambda: [
+            ProcessRow(pid=804, command="/Applications/Cursor.app/Contents/MacOS/Cursor"),
+        ],
+    )
+
+    assert discovery.discover_agent_processes() == []
+
+
 @pytest.mark.parametrize(
     "command",
     [
